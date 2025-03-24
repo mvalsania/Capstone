@@ -1,0 +1,605 @@
+---
+title: "Capstone"
+output: html_document
+date: "2025-03-06"
+---
+
+
+
+```{r}
+
+library(readr)
+library(dplyr)
+library(lubridate)
+
+# Set the path to your folder containing CSV files
+folder_path <- "/Users/marcovalsania/Downloads/csv_chunks"  # Change this to your folder path
+
+# List all the CSV files in the folder
+csv_files <- list.files(folder_path, pattern = "\\.csv$", full.names = TRUE)
+
+# Read each CSV file into a list of data frames
+all_data <- lapply(csv_files, read_csv)
+
+# Combine all data frames into one data frame (assuming all have the same structure)
+combined_data <- do.call(rbind, all_data)
+
+# View the combined data
+head(combined_data)
+
+# Optionally, save the combined data into a new CSV
+write.csv(combined_data, "combined_data.csv", row.names = FALSE)
+
+
+# Read each CSV file into a list of data frames
+all_data <- lapply(csv_files, read_csv)
+
+# Combine all data frames into one data frame
+if (length(all_data) > 0) {
+  combined_data <- do.call(rbind, all_data)
+  print(head(combined_data))  # Debug: View combined data
+} else {
+  combined_data <- NULL
+  cat("No CSV files found in the specified folder.\n")
+}
+
+
+
+```
+
+```{r}
+
+# Rename and remove the unwanted columns
+combined_data <- combined_data %>%
+  rename(
+    Entry = `Entry Time`,
+    Exit = `Transaction Time`,
+    Type = `Transaction Type`,
+    Revenue = `Revenue`,
+    Media = `Media`
+  ) %>%
+  select(-`Previous Station`)  # Remove unwanted columns
+
+
+# Check the renamed columns
+head(combined_data)
+
+```
+```{r}
+
+library(dplyr)
+library(lubridate)
+
+# Ensure that combined_data has the date columns in POSIXct format
+combined_data <- combined_data %>%
+  mutate(
+    Entry = ymd_hms(Entry, tz = "America/Los_Angeles"),
+    Exit  = ymd_hms(Exit, tz = "America/Los_Angeles")
+  )
+
+# Process rows where Media starts with "R":
+# Get the row with Successful payment (to obtain the Revenue)
+r_payment <- combined_data %>%
+  filter(grepl("^R", Media) & Type == "Successful payment")
+
+# Get the row with Successful Pmt At Exit (this row will be kept, but its Revenue will be replaced)
+r_pmt_at_exit <- combined_data %>%
+  filter(grepl("^R", Media) & Type == "Successful Pmt At Exit")
+
+# Get the row with Successful Exit (just for control)
+
+r_succ_exit <- combined_data %>%
+  filter(grepl("^R", Media) & Type == "Successful exit")
+
+# Join the two by Media so that we use the Revenue from the payment row
+r_joined <- r_pmt_at_exit %>%
+  left_join(r_payment %>% select(Media, Revenue), by = "Media", suffix = c("", "_payment")) %>%
+  mutate(Revenue = Revenue_payment) %>%  # Replace Revenue with that from the Successful payment row
+  select(Entry, Exit, Station, Media, Type, Revenue)
+
+# Process rows where Media does NOT start with "R" and keep Successful Pmt At Exit rows
+non_r <- combined_data %>%
+  filter(!grepl("^R", Media) & Type == "Successful Pmt At Exit")
+
+# Combine both subsets into one final dataset
+filtered_data <- bind_rows(r_joined, non_r)
+
+# Further filter the combined dataset:
+# 1. Add the Year extracted from the Exit column.
+# 2. Remove rows where Year is NA.
+# 3. Filter out rows where Length_of_Stay is not between 0 and 300000.
+filtered_data <- filtered_data %>%
+  mutate(Year = year(Exit)) %>%
+  filter(!is.na(Year))
+
+# View the resulting dataset
+head(filtered_data)
+
+# Provide a breakdown (count) by Year
+year_breakdown <- filtered_data %>%
+  group_by(Year) %>%
+  summarise(Count = n())
+
+print(year_breakdown)
+
+```
+
+```{r}
+
+# Assuming your dataset is named 'filtered_data'
+filtered_data <- filtered_data |>
+  mutate(
+    `Entry` = ymd_hms(`Entry`, tz = "America/Los_Angeles"),    # Convert Entry Time to POSIXct
+    `Exit` = ymd_hms(`Exit`, tz = "America/Los_Angeles")  # Convert Transaction Time to POSIXct
+  ) %>%
+  mutate(
+    Length_of_Stay = round(as.numeric(difftime(`Exit`, `Entry`, units = "mins")))  # Round the time difference to nearest minute
+  )
+
+filtered_data <- filtered_data %>%
+  filter(Length_of_Stay >= 0, Length_of_Stay <= 300000)
+
+# View the updated data with the new Length_of_Stay column
+head(filtered_data)
+
+summary_by_station_type <- filtered_data %>% count(Station, Type)
+print(summary_by_station_type)
+
+
+```
+
+
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Assume filtered_data is already created from your previous processing.
+# Create a summary: extract year and month from the Exit date, group by Lot, Year, and Month, and sum the Revenue.
+revenue_summary <- filtered_data %>%
+  mutate(Year = year(Exit),
+         Month = month(Exit)) %>%
+  group_by(Year, Month, Lot) %>%
+  summarise(Total_Revenue = sum(Revenue, na.rm = TRUE)) %>%
+  ungroup() %>%
+  # Create a date variable for plotting (set day=1)
+  mutate(Date = as.Date(paste(Year, Month, "01", sep = "-")))
+
+# View the summarized data
+print(revenue_summary)
+
+# Plot revenue per Lot over time (by month and year)
+ggplot(revenue_summary, aes(x = Date, y = Total_Revenue, color = factor(Lot))) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Revenue per Lot over Time (by Month/Year)",
+    x = "Month-Year",
+    y = "Total Revenue",
+    color = "Lot"
+  ) +
+  theme_minimal()
+
+```
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Assuming filtered_data already contains a Time_bin variable as defined previously.
+# If not, you can recreate it here:
+filtered_data <- filtered_data %>%
+  mutate(Time_bin = cut(Length_of_Stay,
+                        breaks = c(0, 30, 60, 720, 1440, Inf),
+                        labels = c("0-30 mins", "30-60 mins", "1-12 hrs", "12-24 hrs", "24+ hrs"),
+                        right = TRUE,
+                        include.lowest = TRUE))
+
+# Add the Year variable from the Exit date and group by Lot, Year, and Time_bin to summarize revenue.
+revenue_summary <- filtered_data %>%
+  mutate(Year = year(Exit)) %>%
+  group_by(Lot, Year, Time_bin) %>%
+  summarise(Total_Revenue = sum(Revenue, na.rm = TRUE)) %>%
+  ungroup()
+
+# Print the summarized table for inspection
+print(revenue_summary)
+
+# Plot a stacked bar chart: x-axis is Year, with one bar per year for each Lot (faceted), stacked by Time_bin.
+ggplot(revenue_summary, aes(x = factor(Year), y = Total_Revenue, fill = Time_bin)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_wrap(~ Lot, scales = "free_x") +
+  labs(
+    title = "Revenue by Time Spent in Lot by Year",
+    x = "Year",
+    y = "Total Revenue",
+    fill = "Time Spent in Lot"
+  ) +
+  theme_minimal()
+
+
+
+
+
+```
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Ensure filtered_data has a Time_bin variable (if not, create it)
+filtered_data <- filtered_data %>%
+  mutate(Time_bin = cut(Length_of_Stay,
+                        breaks = c(0, 30, 60, 720, 1440, Inf),
+                        labels = c("0-30 mins", "30-60 mins", "1-12 hrs", "12-24 hrs", "24+ hrs"),
+                        right = TRUE,
+                        include.lowest = TRUE))
+
+# Group the data by Lot, Year (from Exit), and Time_bin and count the number of observations
+count_summary <- filtered_data %>%
+  mutate(Year = year(Exit)) %>%
+  group_by(Lot, Year, Time_bin) %>%
+  summarise(Count = n(), .groups = "drop")
+
+# View the summary table
+print(count_summary)
+
+# Plot a stacked bar chart:
+# - x-axis: Year (converted to a factor)
+# - y-axis: Count of observations
+# - Bars are stacked by Time_bin
+# - Facet by Lot to see one chart per lot
+ggplot(count_summary, aes(x = factor(Year), y = Count, fill = Time_bin)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_wrap(~ Lot, scales = "free_x") +
+  labs(
+    title = "Count by Time Spent in Lot by Year",
+    x = "Year",
+    y = "Count",
+    fill = "Time Spent in Lot"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Filter for records with a Length_of_Stay greater than 1 day (1440 minutes)
+# and exclude records from Lot 6.
+long_stays <- filtered_data %>%
+  filter(Length_of_Stay > 1440, Lot != 6) %>%
+  mutate(
+    # Compute the daily rate: revenue per day = (Revenue * 1440) / Length_of_Stay
+    Daily_rate = Revenue * 1440 / Length_of_Stay,
+    Year = year(Exit),
+    Month = month(Exit),
+    # Create a Month_Year date (using the first day of the month)
+    Month_Year = as.Date(paste(Year, Month, "01", sep = "-"))
+  )
+
+# Aggregate to compute the average daily rate per Month_Year and per Lot
+monthly_avg <- long_stays %>%
+  group_by(Lot, Month_Year) %>%
+  summarise(Avg_Daily_Rate = mean(Daily_rate, na.rm = TRUE), .groups = "drop")
+
+# Plot a line chart showing the evolution of the average daily rate over time for each lot
+ggplot(monthly_avg, aes(x = Month_Year, y = Avg_Daily_Rate, color = factor(Lot))) +
+  geom_line() +
+  geom_point() +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(
+    title = "Average Daily Rate for Stays > 1 Day by Lot (excluding Lot 6)",
+    x = "Month-Year",
+    y = "Average Daily Rate ($/day)",
+    color = "Lot"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+```{r}
+
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(ISOweek)  # install.packages("ISOweek") if not installed
+
+# Exclude Lot 6 and keep all years
+data_all_years <- filtered_data %>%
+  filter(Lot != 6)
+
+# Determine the range of years from the Exit date
+years <- sort(unique(year(data_all_years$Exit)))
+
+# Define week numbers (1 to 53)
+week_numbers <- 1:53
+
+# Get unique lots (excluding Lot 6)
+lots <- sort(unique(data_all_years$Lot))
+
+# Create a data frame with all combinations of Lot, Year, and Week number
+occupancy_all <- expand.grid(Lot = lots, Year = years, Week_Num = week_numbers) %>%
+  arrange(Lot, Year, Week_Num) %>%
+  # Convert each Year-Week combination into a representative date (Monday of that week)
+  mutate(Week_Date = ISOweek2date(paste0(Year, "-W", sprintf("%02d", Week_Num), "-1")))
+
+# For each combination, count the number of cars "inside" that lot at that Week_Date.
+# A car is considered "inside" if as.Date(Entry) <= Week_Date and as.Date(Exit) > Week_Date.
+occupancy_all <- occupancy_all %>%
+  rowwise() %>%
+  mutate(
+    Occupancy = {
+      current_lot <- Lot
+      current_week <- Week_Date
+      nrow(data_all_years %>% 
+             filter(Lot == current_lot,
+                    as.Date(Entry) <= current_week,
+                    as.Date(Exit) > current_week))
+    }
+  ) %>%
+  ungroup()
+
+# Remove rows with 0 occupancy
+occupancy_all <- occupancy_all %>% filter(Occupancy > 0)
+
+# Plot the weekly occupancy with each lot in its own facet and larger text sizes for readability
+p <- ggplot(occupancy_all, aes(x = Week_Num, y = Occupancy, color = factor(Year))) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ Lot, ncol = 1, scales = "free_y") +
+  scale_x_continuous(breaks = seq(1, 53, by = 2)) +
+  labs(
+    title = "Weekly Occupancy by Year (Excluding Lot 6)",
+    x = "Week Number",
+    y = "Number of Cars",
+    color = "Year"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p)
+
+# Optionally, save the plot as a larger image:
+# ggsave("weekly_occupancy_by_year.png", p, width = 12, height = 16, dpi = 300)
+
+```
+
+```{r}
+
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Exclude Lot 6 and keep all years
+data_all_years <- filtered_data %>%
+  filter(Lot != 6)
+
+# Determine the overall date range from the data
+start_date <- as.Date(min(data_all_years$Entry))
+end_date <- as.Date(max(data_all_years$Exit))
+
+# Create a daily sequence from start_date to end_date
+day_dates <- seq(start_date, end_date, by = "day")
+
+# Get the unique lots (excluding Lot 6)
+lots <- sort(unique(data_all_years$Lot))
+
+# Create a data frame with all combinations of Lot and each day
+occupancy_all <- expand.grid(Lot = lots, Day = day_dates) %>%
+  arrange(Lot, Day)
+
+# For each combination, count the number of cars "inside" that lot on that day.
+# A car is considered "inside" if its Entry (as.Date) is on or before the day
+# and its Exit (as.Date) is after the day.
+occupancy_all <- occupancy_all %>%
+  rowwise() %>%
+  mutate(
+    Occupancy = nrow(
+      data_all_years %>% 
+        filter(Lot == Lot,
+               as.Date(Entry) <= Day,
+               as.Date(Exit) > Day)
+    )
+  ) %>%
+  ungroup()
+
+# Remove days where occupancy is 0
+occupancy_all <- occupancy_all %>% filter(Occupancy > 0)
+
+# Extract the Year from the Day for coloring in the plot
+occupancy_all <- occupancy_all %>%
+  mutate(Year = year(Day))
+
+# Plot daily occupancy with each lot in a separate facet and lines colored by Year
+ggplot(occupancy_all, aes(x = Day, y = Occupancy, color = factor(Year))) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ Lot, ncol = 1, scales = "free_y") +
+  labs(
+    title = "Daily Occupancy by Year (Excluding Lot 6)",
+    x = "Date",
+    y = "Number of Cars",
+    color = "Year"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Create new columns: rounded hours and revenue per hour
+data_with_rate <- filtered_data %>%
+  mutate(
+    # Convert Length_of_Stay (minutes) to hours, rounded to the nearest whole number
+    Hours_Rounded = round(Length_of_Stay / 60, 0),
+    # If rounding produces 0, set it to 1 hour (to avoid division by zero)
+    Hours_Rounded = if_else(Hours_Rounded == 0, 1L, Hours_Rounded),
+    Revenue_per_Hour = Revenue / Hours_Rounded,
+    Year = year(Exit)
+  )
+
+# Filter for records in 2024 for Lot 2 and only for 1, 2, 3, or 4 hours
+data_2024_lot2 <- data_with_rate %>%
+  filter(Year == 2024, Lot == 2, Hours_Rounded %in% c(1, 2, 3, 4))
+
+# Plot the distribution (boxplot) of Revenue per Hour for each rounded hour category
+ggplot(data_2024_lot2, aes(x = factor(Hours_Rounded), y = Revenue_per_Hour)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.7) +
+  labs(
+    title = "Distribution of Revenue per Hour by Rounded Hours Stayed (1-4 hrs)",
+    subtitle = "Lot 2 in 2024",
+    x = "Rounded Hours Stayed",
+    y = "Revenue per Hour ($/hr)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+```
+
+```{r}
+
+library(dplyr)
+library(lubridate)
+
+# Ensure that the Year variable is available (extracted from the Exit date)
+data_with_year <- filtered_data %>%
+  mutate(Year = year(Exit))
+
+# Filter for records in 2024 for Lot 2
+data_2024_lot2 <- data_with_year %>%
+  filter(Year == 2022, Lot == 4)
+
+# Group by Revenue and count the number of records for each unique revenue value
+revenue_count <- data_2024_lot2 %>%
+  group_by(Revenue) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  arrange(Revenue)
+
+# Print the frequency table
+print(revenue_count)
+
+```
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Ensure that the Year variable is available (extracted from the Exit date)
+data_with_year <- filtered_data %>%
+  mutate(Year = year(Exit))
+
+# Filter for records in 2022 for Lot 4
+data_2022_lot4 <- data_with_year %>%
+  filter(Year == 2022, Lot == 4)
+
+# Group by Revenue and count the number of records for each unique revenue value
+revenue_count <- data_2022_lot4 %>%
+  group_by(Revenue) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  arrange(Revenue)
+
+# Filter the results to include only those with more than 50 occurrences
+revenue_count_filtered <- revenue_count %>%
+  filter(Count > 50)
+
+# Print the filtered frequency table
+print(revenue_count_filtered)
+
+# Plot a bar chart for the filtered results
+ggplot(revenue_count_filtered, aes(x = Revenue, y = Count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(
+    title = "Revenue Count for Lot 4 in 2022 (Only Values with > 50 Occurrences)",
+    x = "Revenue",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+```{r}
+
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Filter data for stays under 30 minutes and exclude Lot 6, then create a Revenue_Type variable
+data_revenue <- filtered_data %>%
+  filter(Length_of_Stay < 30, Lot != 6) %>%
+  mutate(
+    Year = year(Exit),
+    Revenue_Type = if_else(Revenue == 0, "Zero Revenue", "Non-zero Revenue"),
+    # Force ordering so that "Zero Revenue" appears first in the factor (i.e., intended for bottom)
+    Revenue_Type = factor(Revenue_Type, levels = c("Zero Revenue", "Non-zero Revenue"))
+  )
+
+# Plot a stacked histogram by Length_of_Stay with facets for Lot and Year.
+# Use position_stack(reverse = TRUE) to flip the stacking order so that the first factor ("Zero Revenue")
+# is at the bottom.
+ggplot(data_revenue, aes(x = Length_of_Stay, fill = Revenue_Type)) +
+  geom_histogram(binwidth = 1, color = "black", position = position_stack(reverse = TRUE)) +
+  facet_grid(Lot ~ Year, scales = "free_y") +
+  scale_fill_manual(values = c("Zero Revenue" = "red", "Non-zero Revenue" = "green")) +
+  labs(
+    title = "Distribution of Length of Stay (minutes) by Revenue Type (< 30 mins)",
+    subtitle = "Zero Revenue (red) on Bottom, Non-zero Revenue (green) on Top; Breakdown by Lot and Year (excluding Lot 6)",
+    x = "Length of Stay (minutes)",
+    y = "Count",
+    fill = "Revenue Type"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+```
+
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Filter data: include only entries with Length_of_Stay between 0 and 90 minutes, regardless of revenue, and exclude Lot 6.
+short_stays <- filtered_data %>%
+  filter(Length_of_Stay >= 0, Length_of_Stay <= 90, Lot != 6) %>%
+  mutate(Year = year(Exit))
+
+# Plot the distribution by minute for each Lot and Year using facet_grid
+ggplot(short_stays, aes(x = Length_of_Stay)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black") +
+  facet_grid(Lot ~ Year, scales = "free_y") +
+  labs(
+    title = "Distribution of Length of Stay (minutes) for Records (0-90 mins)",
+    subtitle = "Breakdown by Lot and Year (excluding Lot 6)",
+    x = "Length of Stay (minutes)",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+```
+
+
+
+
+
+
+
