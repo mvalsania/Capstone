@@ -125,25 +125,35 @@ print(year_breakdown)
 ```
 
 ```{r}
+library(readr)
+library(dplyr)
+library(lubridate)
 
-# Assuming your dataset is named 'filtered_data'
-filtered_data <- filtered_data |>
+# Process the data: convert time columns, compute Length_of_Stay, filter data, and create the Lot column.
+filtered_data <- filtered_data %>%
   mutate(
-    `Entry` = ymd_hms(`Entry`, tz = "America/Los_Angeles"),    # Convert Entry Time to POSIXct
-    `Exit` = ymd_hms(`Exit`, tz = "America/Los_Angeles")  # Convert Transaction Time to POSIXct
+    Entry = ymd_hms(Entry, tz = "America/Los_Angeles"),
+    Exit  = ymd_hms(Exit, tz = "America/Los_Angeles")
   ) %>%
   mutate(
-    Length_of_Stay = round(as.numeric(difftime(`Exit`, `Entry`, units = "mins")))  # Round the time difference to nearest minute
-  )
+    Length_of_Stay = round(as.numeric(difftime(Exit, Entry, units = "mins")))
+  ) %>%
+  filter(Length_of_Stay >= 0, Length_of_Stay <= 300000) %>%
+  # Create the Lot column (e.g., from Station "A43", extract "43" as a numeric value; adjust as needed)
+  mutate(Lot = as.numeric(substr(Station, 2, 2)))
 
-filtered_data <- filtered_data %>%
-  filter(Length_of_Stay >= 0, Length_of_Stay <= 300000)
-
-# View the updated data with the new Length_of_Stay column
+# View the updated data with the new Length_of_Stay and Lot columns
 head(filtered_data)
 
+# Summarize count by Station and Type
 summary_by_station_type <- filtered_data %>% count(Station, Type)
 print(summary_by_station_type)
+
+# Write the updated data to a new CSV file
+write_csv(filtered_data, "filtered_data.csv")
+
+ 
+
 
 
 ```
