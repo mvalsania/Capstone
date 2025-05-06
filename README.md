@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository contains the data‐processing pipeline developed for my Data Science capstone project, which explores dynamic pricing strategies for parking revenue optimization at Ontario International Airport (OIA). The pipeline:
+This repository contains the data‐processing pipeline developed for my Data Science capstone project, which explores dynamic pricing strategies for parking lot facilities at Ontario International Airport (OIA). The pipeline:
 
 1. **Splits** raw Excel data into standardized folders (`NewFormat`, `OldFormat`).
 2. **De‐duplicates** files based on timestamp and size criteria.
@@ -137,8 +137,4 @@ Rscript -e "rmarkdown::render('notebooks/Capstone.Rmd')"
 
 ---
 
-## Next Steps
-
-* Load `csv_chunks/` into a database or DataFrame for exploratory analysis.
-* Develop demand‐forecasting and price‐optimization models in `notebooks/`.
-* Evaluate revenue uplift under various dynamic pricing scenarios.
+Unfortunately, the full report cannot be shared as it contains confidential data.
